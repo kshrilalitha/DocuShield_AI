@@ -1,0 +1,23 @@
+import os
+
+class Settings:
+    PROJECT_NAME: str = "DocuShield AI"
+    API_V1_STR: str = "/api"
+    SECRET_KEY: str = os.getenv("SECRET_KEY", "7b0f22f7cdbfd6b63d72111c15f939e6a715a7cf6103328e18dbff67a731efc1")
+    ALGORITHM: str = "HS256"
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24  # 1 day
+
+    DATABASE_URL: str = os.getenv("DATABASE_URL", "sqlite:///./docushield.db")
+    UPLOAD_DIR: str = os.getenv("UPLOAD_DIR", "./media/uploads")
+    ELA_DIR: str = os.getenv("ELA_DIR", "./media/ela")
+
+    # Roles definitions
+    ROLE_ADMIN: str = "Admin"
+    ROLE_UNDERWRITER: str = "Underwriter"
+    ROLE_AUDITOR: str = "Auditor"
+
+settings = Settings()
+
+# Ensure folders exist
+os.makedirs(settings.UPLOAD_DIR, exist_ok=True)
+os.makedirs(settings.ELA_DIR, exist_ok=True)

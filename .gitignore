@@ -1,0 +1,33 @@
+# Dependencies
+node_modules/
+/frontend/node_modules/
+/backend/.venv/
+/backend/venv311/
+
+# Next.js Build Outputs
+/.next/
+/frontend/.next/
+/frontend/out/
+
+# Python caching
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Databases & Media uploads
+/backend/docushield.db
+/backend/media/
+/backend/server.log
+/backend/import_trace.log
+*.log
+
+# Environment variables & secrets
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# OS files
+.DS_Store
+Thumbs.db
