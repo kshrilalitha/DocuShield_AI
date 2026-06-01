@@ -1,4 +1,4 @@
-# DocuShield AI — Underwriting Security Platfor
+# DocuShield AI — Underwriting Security Platform
 
 > **"Detect Fraud Before It Becomes a Loan."**
 
