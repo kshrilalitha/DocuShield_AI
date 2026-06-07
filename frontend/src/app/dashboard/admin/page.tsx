@@ -12,7 +12,8 @@ import {
   TrendingUp,
   Settings
 } from "lucide-react";
-import { useStore } from "@/store";
+import { useAuthStore } from "@/store/authStore";
+import { apiFetch } from "@/lib/api";
 
 interface UserRecord {
   id: number;
@@ -23,7 +24,7 @@ interface UserRecord {
 }
 
 export default function AdminSettings() {
-  const { user } = useStore();
+  const { user } = useAuthStore();
   
   const [loading, setLoading] = useState(true);
   const [usersList, setUsersList] = useState<UserRecord[]>([]);
@@ -34,14 +35,9 @@ export default function AdminSettings() {
   useEffect(() => {
     async function fetchAdminData() {
       try {
-        const token = localStorage.getItem("token") || "";
         const [usersRes, telemetryRes] = await Promise.all([
-          fetch("http://localhost:8000/api/auth/users", {
-            headers: { "Authorization": `Bearer ${token}` }
-          }),
-          fetch("http://localhost:8000/api/analytics/summary", {
-            headers: { "Authorization": `Bearer ${token}` }
-          })
+          apiFetch("/api/auth/users"),
+          apiFetch("/api/analytics/summary")
         ]);
         
         if (usersRes.ok && telemetryRes.ok) {
@@ -70,10 +66,8 @@ export default function AdminSettings() {
   const handleRoleChange = async (userId: number, newRole: string) => {
     setUpdatingUserId(userId);
     try {
-      const token = localStorage.getItem("token") || "";
-      const response = await fetch(`http://localhost:8000/api/auth/users/${userId}/role?role=${newRole}`, {
-        method: "PUT",
-        headers: { "Authorization": `Bearer ${token}` }
+      const response = await apiFetch(`/api/auth/users/${userId}/role?role=${newRole}`, {
+        method: "PUT"
       });
       
       if (!response.ok) throw new Error("Could not modify user keycard role.");

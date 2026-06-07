@@ -12,6 +12,8 @@ import {
   BookOpen
 } from "lucide-react";
 
+import { apiFetch } from "@/lib/api";
+
 interface ComplianceRule {
   id: string;
   rule: string;
@@ -27,7 +29,7 @@ export default function RiskAnalytics() {
   useEffect(() => {
     async function fetchAnalytics() {
       try {
-        const response = await fetch("http://localhost:8000/api/analytics/summary");
+        const response = await apiFetch("/api/analytics/summary");
         if (response.ok) {
           const data = await response.json();
           setComplianceRules(data.rbi_compliance_dashboard);

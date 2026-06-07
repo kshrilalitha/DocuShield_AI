@@ -51,9 +51,26 @@ class DocumentResponse(BaseModel):
     compression_status: str
     uploaded_at: datetime
     uploaded_by_id: int
+    gnn_fraud_probability: Optional[float] = 0.0
+    gnn_risk_level: Optional[str] = "Low"
 
     class Config:
         from_attributes = True
+
+class LayoutLMv3Field(BaseModel):
+    value: str
+    confidence: float
+
+class LayoutLMv3IncomeField(BaseModel):
+    value: float
+    confidence: float
+
+class LayoutLMv3Intelligence(BaseModel):
+    applicant_name: LayoutLMv3Field
+    address: LayoutLMv3Field
+    income: LayoutLMv3IncomeField
+    property_id: LayoutLMv3Field
+    document_type: LayoutLMv3Field
 
 class DocumentAnalysisResponse(BaseModel):
     document_id: str
@@ -63,6 +80,11 @@ class DocumentAnalysisResponse(BaseModel):
     risk_score: float
     risk_level: str
     issues: List[str]
+    layoutlm_intelligence: Optional[LayoutLMv3Intelligence] = None
+    signature_similarity: Optional[float] = 1.0
+    possible_forgery: Optional[bool] = False
+    gnn_fraud_probability: Optional[float] = 0.0
+    gnn_risk_level: Optional[str] = "Low"
 
     class Config:
         from_attributes = True

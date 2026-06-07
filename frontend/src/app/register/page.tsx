@@ -5,6 +5,8 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { ShieldAlert, User, Mail, Lock, Shield } from "lucide-react";
 
+import { apiFetch } from "@/lib/api";
+
 export default function RegisterPage() {
   const router = useRouter();
 
@@ -21,7 +23,7 @@ export default function RegisterPage() {
     setLoading(true);
 
     try {
-      const response = await fetch("http://localhost:8000/api/auth/register", {
+      const response = await apiFetch("/api/auth/register", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ username, email, password, role }),

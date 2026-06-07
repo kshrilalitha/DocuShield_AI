@@ -53,6 +53,11 @@ class Document(Base):
     extracted_text = Column(Text, nullable=True)
     metadata_json = Column(Text, nullable=True)
     explainable_ai_reasons = Column(Text, nullable=True) # JSON list of strings
+    layoutlm_intelligence = Column(Text, nullable=True) # JSON string representation of LayoutLMv3 key-value extractions
+    signature_similarity = Column(Float, default=1.0)
+    possible_forgery = Column(Boolean, default=False)
+    gnn_fraud_probability = Column(Float, default=0.0)
+    gnn_risk_level = Column(String, default="Low")
 
     uploader = relationship("User", back_populates="documents")
 

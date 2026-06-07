@@ -3,9 +3,9 @@ import os
 class Settings:
     PROJECT_NAME: str = "DocuShield AI"
     API_V1_STR: str = "/api"
-    SECRET_KEY: str = os.getenv("SECRET_KEY", "7b0f22f7cdbfd6b63d72111c15f939e6a715a7cf6103328e18dbff67a731efc1")
+    SECRET_KEY: str = os.getenv("JWT_SECRET_KEY", "7b0f22f7cdbfd6b63d72111c15f939e6a715a7cf6103328e18dbff67a731efc1")
     ALGORITHM: str = "HS256"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24  # 1 day
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = int(os.getenv("JWT_EXPIRE_MINUTES", "60"))
 
     DATABASE_URL: str = os.getenv("DATABASE_URL", "sqlite:///./docushield.db")
     UPLOAD_DIR: str = os.getenv("UPLOAD_DIR", "./media/uploads")

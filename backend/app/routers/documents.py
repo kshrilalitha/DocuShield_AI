@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app import models, schemas, security
 from app.config import settings
-from app.services import forensics, ocr, validator, risk_score, ml_pipeline
+from app.services import forensics, ocr, validator, risk_score, model_inference, layoutlmv3_service, neo4j_service, signature_service, ml_pipeline
 logger = logging.getLogger("docushield.pipeline")
 
 router = APIRouter(prefix="/documents", tags=["documents"])
@@ -19,7 +19,7 @@ router = APIRouter(prefix="/documents", tags=["documents"])
 @router.post("/upload", response_model=List[schemas.DocumentAnalysisResponse])
 def upload_documents(
     files: List[UploadFile] = File(...),
-    current_user: models.User = Depends(security.get_current_active_user),
+    current_user: models.User = Depends(security.RoleChecker(["Admin", "Underwriter"])),
     db: Session = Depends(get_db)
 ):
     results = []
@@ -62,6 +62,13 @@ def upload_documents(
                 except Exception:
                     meta_json = {}
                     
+            layoutlm_intel = None
+            if existing_doc.layoutlm_intelligence:
+                try:
+                    layoutlm_intel = json.loads(existing_doc.layoutlm_intelligence)
+                except Exception:
+                    layoutlm_intel = None
+
             results.append({
                 "document_id": existing_doc.document_id or str(uuid.uuid4()),
                 "status": existing_doc.analysis_status or "processed",
@@ -69,7 +76,12 @@ def upload_documents(
                 "metadata": meta_json,
                 "risk_score": existing_doc.risk_score or existing_doc.fraud_score or 0.0,
                 "risk_level": existing_doc.risk_level or "Low",
-                "issues": reasons
+                "issues": reasons,
+                "layoutlm_intelligence": layoutlm_intel,
+                "signature_similarity": existing_doc.signature_similarity,
+                "possible_forgery": existing_doc.possible_forgery,
+                "gnn_fraud_probability": existing_doc.gnn_fraud_probability,
+                "gnn_risk_level": existing_doc.gnn_risk_level
             })
             continue
             
@@ -87,6 +99,9 @@ def upload_documents(
         # 3. Process ELA (Error Level Analysis) and get numeric score
         ela_path = forensics.run_error_level_analysis(saved_path)
         ela_score = forensics.calculate_ela_score(ela_path)
+        
+        # Calculate dynamic ELA tamper regions
+        detected_regions = forensics.detect_ela_anomalies(ela_path)
         
         # 4. Process Metadata Analysis
         meta_report = forensics.inspect_metadata(saved_path, original_filename=upload_file.filename)
@@ -119,30 +134,99 @@ def upload_documents(
             "ocr_failed": ocr_failed
         }))
         
-        # 6. Run ML pipeline prediction on uploaded document bytes
+        # 5b. Run AI/ML Document Forgery Classification (ResNet50 / ML pipeline)
         try:
             ml_result = ml_pipeline.predict_document(file_bytes)
             ml_score = ml_result["raw_score"]
             ml_confidence = ml_result["confidence"]
-        except Exception as e:
-            logger.error(f"ML pipeline prediction failed for uploaded file: {e}")
+            # Convert prediction dictionary keys to match expected lowercase format
+            ml_prediction = {
+                "prediction": ml_result.get("prediction", "genuine").lower(),
+                "confidence": ml_result.get("confidence", 50.0) / 100.0,
+                "risk_level": ml_result.get("risk_level", "Low")
+            }
+        except Exception as ml_err:
+            logger.error(f"ML Classifier prediction failed: {ml_err}")
+            ml_prediction = {"prediction": "genuine", "confidence": 0.5, "error": str(ml_err)}
             ml_score = 0.0
             ml_confidence = 50.0
-            
-        # 7. Calculate Forensic Risk Score incorporating quality, ELA, and compression
+
+        # 5c. Run LayoutLMv3 Document Intelligence
+        layoutlm_intel = None
+        try:
+            layoutlm_intel = layoutlmv3_service.extract_document_intelligence(saved_path, ocr_report.get("text_blocks", []))
+            logger.info(json.dumps({
+                "event": "layoutlm_completed",
+                "document_id": doc_uuid,
+                "file_name": upload_file.filename
+            }))
+        except Exception as layoutlm_err:
+            logger.error(f"LayoutLMv3 intelligence extraction failed: {layoutlm_err}")
+
+        # 5d. Run Graph Syndicate analysis
+        ocr_fields = ocr.extract_fields_from_text(ocr_report.get("extracted_text", ""))
+        intel_fields = {
+            "applicant_name": (layoutlm_intel.get("applicant_name", {}).get("value") if (layoutlm_intel and layoutlm_intel.get("applicant_name")) else ocr_fields["applicant_name"]),
+            "address": (layoutlm_intel.get("address", {}).get("value") if (layoutlm_intel and layoutlm_intel.get("address")) else ocr_fields["address"]),
+            "property_id": (layoutlm_intel.get("property_id", {}).get("value") if (layoutlm_intel and layoutlm_intel.get("property_id")) else ocr_fields["property_id"]),
+            "income": (layoutlm_intel.get("income", {}).get("value") if (layoutlm_intel and layoutlm_intel.get("income")) else ocr_fields["monthly_income"]),
+            "document_type": (layoutlm_intel.get("document_type", {}).get("value") if (layoutlm_intel and layoutlm_intel.get("document_type")) else "UNKNOWN")
+        }
+        
+        # Ensure values exist or fallback
+        app_name = intel_fields["applicant_name"] or ocr_fields["applicant_name"]
+        addr_val = intel_fields["address"] or ocr_fields["address"]
+        
+        phone_numbers = neo4j_service.extract_phone_numbers(ocr_report.get("extracted_text", ""))
+        graph_risk_penalty, graph_reason = neo4j_service.calculate_graph_risk_for_document(
+            doc_uuid, app_name, addr_val, phone_numbers, db
+        )
+
+        # 5e. Run Signature Verification Analysis
+        sig_report = {"signature_similarity": 1.0, "possible_forgery": False}
+        try:
+            sig_report = signature_service.verify_document_signature(
+                saved_path, app_name, ocr_report.get("text_blocks", [])
+            )
+        except Exception as sig_err:
+            logger.error(f"Signature verification failed: {sig_err}")
+
+        # 5f. Run GNN Syndicate Analysis
+        gnn_report = {"gnn_fraud_probability": 0.0, "risk_level": "Low"}
+        try:
+            from app.services import gnn_service
+            gnn_report = gnn_service.predict_graph_risk(
+                doc_id=doc_uuid,
+                applicant_name=app_name,
+                address=addr_val,
+                phone_numbers=phone_numbers,
+                db=db
+            )
+        except Exception as gnn_err:
+            logger.error(f"GNN prediction failed in pipeline: {gnn_err}")
+
+        # 6. Calculate Forensic Risk Score incorporating quality, ELA, compression and local features
         risk_report = risk_score.calculate_risk_score(
             meta_report=meta_report,
             ocr_report=ocr_report,
+            ml_prediction=ml_prediction,
             ocr_failed=ocr_failed,
+            graph_risk_penalty=graph_risk_penalty,
+            graph_reason=graph_reason,
+            possible_forgery=sig_report["possible_forgery"],
+            signature_similarity=sig_report["signature_similarity"],
+            gnn_fraud_probability=gnn_report["gnn_fraud_probability"],
+            gnn_risk_level=gnn_report["risk_level"],
             ela_score=ela_score,
             compress_report=compress_report,
             quality_report=quality_report
         )
-        
+
         # Combined weighted score: 0.6 * ML + 0.4 * Forensics
         fraud_score = ml_pipeline.combine_risk_score(
             ml_score=ml_score,
             forensic_score=risk_report["risk_score"]
+        )
         )
         
         # Structured log: risk score generated
@@ -175,13 +259,15 @@ def upload_documents(
             signature_status=signature_status,
             compression_status=compression_status,
             uploaded_by_id=current_user.id,
-            tamper_regions=json.dumps(ocr_report.get("tamper_regions", []) or ([
-                {"id": 1, "x": 75, "y": 295, "w": 250, "h": 30, "risk": "High", "label": "Income Figure Patched (Font mismatch)"},
-                {"id": 2, "x": 380, "y": 680, "w": 120, "h": 50, "risk": "Suspicious", "label": "Signature Block Compression Alteration"}
-            ] if fraud_score > 50.0 else [])),
+            tamper_regions=json.dumps(detected_regions),
             extracted_text=ocr_report.get("extracted_text", "Sample text"),
             metadata_json=json.dumps(meta_report),
             explainable_ai_reasons=json.dumps(risk_report["issues"]),
+            layoutlm_intelligence=json.dumps(layoutlm_intel) if layoutlm_intel else None,
+            signature_similarity=round(float(sig_report["signature_similarity"]), 4),
+            possible_forgery=sig_report["possible_forgery"],
+            gnn_fraud_probability=round(float(gnn_report["gnn_fraud_probability"]), 4),
+            gnn_risk_level=gnn_report["risk_level"],
             
             # New processing pipeline columns
             document_id=doc_uuid,
@@ -199,6 +285,12 @@ def upload_documents(
         db.commit()
         db.refresh(doc_record)
         
+        # Sync to Neo4j graph database
+        try:
+            neo4j_service.add_document_nodes_and_relationships(doc_record, intel_fields, phone_numbers)
+        except Exception as neo_sync_err:
+            logger.warning(f"Neo4j sync failed: {neo_sync_err}")
+        
         # Structured log: database saved
         logger.info(json.dumps({
             "event": "database_saved",
@@ -213,28 +305,39 @@ def upload_documents(
             "metadata": meta_report,
             "risk_score": float(fraud_score),
             "risk_level": risk_report["risk_level"],
-            "issues": risk_report["issues"]
+            "issues": risk_report["issues"],
+            "layoutlm_intelligence": layoutlm_intel,
+            "signature_similarity": sig_report["signature_similarity"],
+            "possible_forgery": sig_report["possible_forgery"],
+            "gnn_fraud_probability": gnn_report["gnn_fraud_probability"],
+            "gnn_risk_level": gnn_report["risk_level"]
         })
         
     return results
 
 @router.get("/", response_model=List[schemas.DocumentResponse])
 def list_documents(
-    current_user: models.User = Depends(security.get_current_active_user),
+    current_user: models.User = Depends(security.RoleChecker(["Admin", "Underwriter"])),
     db: Session = Depends(get_db)
 ):
-    docs = db.query(models.Document).order_by(models.Document.uploaded_at.desc()).all()
+    if current_user.role == "Admin":
+        docs = db.query(models.Document).order_by(models.Document.uploaded_at.desc()).all()
+    else:
+        docs = db.query(models.Document).filter(models.Document.uploaded_by_id == current_user.id).order_by(models.Document.uploaded_at.desc()).all()
     return docs
 
 @router.get("/{doc_id}")
 def get_document_details(
     doc_id: int,
-    current_user: models.User = Depends(security.get_current_active_user),
+    current_user: models.User = Depends(security.RoleChecker(["Admin", "Underwriter"])),
     db: Session = Depends(get_db)
 ):
     doc = db.query(models.Document).filter(models.Document.id == doc_id).first()
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
+        
+    if current_user.role == "Underwriter" and doc.uploaded_by_id != current_user.id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied to this document")
         
     # De-serialize JSON properties
     return {
@@ -259,14 +362,19 @@ def get_document_details(
         "tamper_regions": json.loads(doc.tamper_regions or "[]"),
         "explainable_ai_reasons": json.loads(doc.explainable_ai_reasons or "[]"),
         "metadata_json": json.loads(doc.metadata_json or "{}"),
-        "extracted_text": doc.extracted_text
+        "extracted_text": doc.extracted_text,
+        "layoutlm_intelligence": json.loads(doc.layoutlm_intelligence) if doc.layoutlm_intelligence else None,
+        "signature_similarity": doc.signature_similarity,
+        "possible_forgery": doc.possible_forgery,
+        "gnn_fraud_probability": doc.gnn_fraud_probability,
+        "gnn_risk_level": doc.gnn_risk_level
     }
 
 @router.post("/cross-validate", response_model=schemas.CrossValidationResponse)
 def cross_validate_documents(
     doc_id_1: int = Form(...),
     doc_id_2: int = Form(...),
-    current_user: models.User = Depends(security.get_current_active_user),
+    current_user: models.User = Depends(security.RoleChecker(["Admin", "Underwriter"])),
     db: Session = Depends(get_db)
 ):
     doc1 = db.query(models.Document).filter(models.Document.id == doc_id_1).first()
@@ -275,22 +383,31 @@ def cross_validate_documents(
     if not doc1 or not doc2:
         raise HTTPException(status_code=404, detail="One or both documents do not exist")
 
-    # Map records to validation lists
-    # Note: Extracting properties from text inside documents:
+    if current_user.role == "Underwriter":
+        if doc1.uploaded_by_id != current_user.id or doc2.uploaded_by_id != current_user.id:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied to one or both documents")
+
+    # Map records to validation lists using LayoutLMv3 intelligence if available, otherwise regex ocr
+    fields1_ocr = ocr.extract_fields_from_text(doc1.extracted_text or "")
+    fields2_ocr = ocr.extract_fields_from_text(doc2.extracted_text or "")
+    
+    intel1 = json.loads(doc1.layoutlm_intelligence) if doc1.layoutlm_intelligence else {}
+    intel2 = json.loads(doc2.layoutlm_intelligence) if doc2.layoutlm_intelligence else {}
+    
     doc1_payload = {
         "name": doc1.file_name,
-        "applicant_name": "Ramesh Kumar" if "ramesh" in doc1.file_name.lower() or doc1.fraud_score < 50.0 else "Sunita Kumar",
-        "property_address": "45, Residency Road, Bangalore - 560025",
-        "property_id": "PROP-BLR-045",
-        "monthly_income": 145000.0 if doc1.fraud_score < 50.0 else 845000.0
+        "applicant_name": intel1.get("applicant_name", {}).get("value") or fields1_ocr["applicant_name"],
+        "property_address": intel1.get("address", {}).get("value") or fields1_ocr["address"],
+        "property_id": intel1.get("property_id", {}).get("value") or fields1_ocr["property_id"],
+        "monthly_income": intel1.get("income", {}).get("value") or fields1_ocr["monthly_income"]
     }
     
     doc2_payload = {
         "name": doc2.file_name,
-        "applicant_name": "Ramesh Kumar" if "ramesh" in doc2.file_name.lower() or doc2.fraud_score < 50.0 else "Sunita Roy",
-        "property_address": "45, Residency Road, Bangalore - 560025" if "salary" in doc2.file_name.lower() else "Utility Reg M.G. Road",
-        "property_id": "PROP-BLR-045",
-        "monthly_income": 145000.0
+        "applicant_name": intel2.get("applicant_name", {}).get("value") or fields2_ocr["applicant_name"],
+        "property_address": intel2.get("address", {}).get("value") or fields2_ocr["address"],
+        "property_id": intel2.get("property_id", {}).get("value") or fields2_ocr["property_id"],
+        "monthly_income": intel2.get("income", {}).get("value") or fields2_ocr["monthly_income"]
     }
 
     report = validator.perform_cross_validation([doc1_payload, doc2_payload])
@@ -318,12 +435,19 @@ def cross_validate_documents(
 
 # Simulated report generation routes
 @router.get("/{doc_id}/download-pdf")
-def download_pdf_report(doc_id: int, db: Session = Depends(get_db)):
+def download_pdf_report(
+    doc_id: int,
+    current_user: models.User = Depends(security.RoleChecker(["Admin", "Underwriter"])),
+    db: Session = Depends(get_db)
+):
     # To keep this zero-dependency and fast, we send a nice text/pdf mock content response
     # Or a dummy report file to verify PDF downloads works.
     doc = db.query(models.Document).filter(models.Document.id == doc_id).first()
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
+        
+    if current_user.role == "Underwriter" and doc.uploaded_by_id != current_user.id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied to this document")
         
     dummy_pdf_content = f"""%PDF-1.4
 %MOCK DOCUSHIELD UNDERWRITING REPORT
@@ -351,10 +475,17 @@ DocuShield AI Platform Underwriting Security
     )
 
 @router.get("/{doc_id}/download-excel")
-def download_excel_report(doc_id: int, db: Session = Depends(get_db)):
+def download_excel_report(
+    doc_id: int,
+    current_user: models.User = Depends(security.RoleChecker(["Admin", "Underwriter"])),
+    db: Session = Depends(get_db)
+):
     doc = db.query(models.Document).filter(models.Document.id == doc_id).first()
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
+        
+    if current_user.role == "Underwriter" and doc.uploaded_by_id != current_user.id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied to this document")
         
     dummy_excel_content = (
         f"DocuShield Case Report\n"

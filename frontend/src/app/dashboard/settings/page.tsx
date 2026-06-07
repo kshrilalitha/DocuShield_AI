@@ -12,10 +12,11 @@ import {
   Check
 } from "lucide-react";
 import { useStore } from "@/store";
+import { useAuthStore } from "@/store/authStore";
 
 export default function SystemSettings() {
+  const { user } = useAuthStore();
   const { 
-    user, 
     language, 
     setLanguage, 
     theme, 

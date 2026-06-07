@@ -13,6 +13,8 @@ import {
   ShieldAlert
 } from "lucide-react";
 
+import { apiFetch } from "@/lib/api";
+
 function HeatmapViewerContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -26,7 +28,7 @@ function HeatmapViewerContent() {
   useEffect(() => {
     async function fetchCaseDetails() {
       try {
-        const response = await fetch(`http://localhost:8000/api/documents/${docId}`);
+        const response = await apiFetch(`/api/documents/${docId}`);
         if (!response.ok) {
           throw new Error("Could not retrieve file analysis details.");
         }

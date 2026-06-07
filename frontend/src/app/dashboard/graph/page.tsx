@@ -12,6 +12,8 @@ import {
   Sparkles
 } from "lucide-react";
 
+import { apiFetch } from "@/lib/api";
+
 interface Node {
   id: string;
   label: string;
@@ -37,7 +39,7 @@ export default function GraphIntelligence() {
   useEffect(() => {
     async function fetchNetworkData() {
       try {
-        const response = await fetch("http://localhost:8000/api/graph/network");
+        const response = await apiFetch("/api/graph/network");
         if (response.ok) {
           const data = await response.json();
           setNodes(data.nodes);
@@ -48,44 +50,11 @@ export default function GraphIntelligence() {
           if (crit) setSelectedNode(crit);
         }
       } catch (err) {
-        console.warn("FastAPI offline. Hydrating mock Neo4j nodes.");
-        const mockNodes: Node[] = [
-          { id: "A1", label: "Ramesh Kumar", type: "Applicant", status: "Clean", details: "Credit Score: 780 | Low Risk" },
-          { id: "A2", label: "Sunita Kumar", type: "Applicant", status: "Critical", details: "Linked to Tampered Salary Slip | Critical Risk" },
-          { id: "A3", label: "Vijay Mallya", type: "Applicant", status: "Critical", details: "Blacklisted Applicant | High Risk" },
-          { id: "P1", label: "45 Residency Rd, Bng", type: "Property", status: "Suspicious", details: "Shared by 3 independent loan requests" },
-          { id: "P2", label: "12 M.G. Road, Bng", type: "Property", status: "Clean", details: "Verified title deed" },
-          { id: "L1", label: "Loan #5892 (INR 50L)", type: "Loan", status: "Clean", details: "Status: Under Review" },
-          { id: "L2", label: "Loan #9102 (INR 85L)", type: "Loan", status: "Critical", details: "Status: Suspended (Tampering detected)" },
-          { id: "L3", label: "Loan #2214 (INR 1.2Cr)", type: "Loan", status: "Critical", details: "Status: Flagged" },
-          { id: "B1", label: "Canara Bank - MG Road", type: "Branch", status: "Clean", details: "Bangalore Urban" },
-          { id: "B2", label: "Canara Bank - Indiranagar", type: "Branch", status: "Clean", details: "Bangalore East" },
-          { id: "C1", label: "Karan Malhotra", type: "Co-applicant", status: "Suspicious", details: "Linked to 4 defaulted loans" }
-        ];
-
-        const mockEdges: Edge[] = [
-          { source: "A1", target: "L1", relation: "APPLIED_FOR" },
-          { source: "A1", target: "P1", relation: "COLLATERAL_OWNER" },
-          { source: "L1", target: "B1", relation: "ORIGINATED_AT" },
-          { source: "A2", target: "L2", relation: "APPLIED_FOR" },
-          { source: "A2", target: "P1", relation: "COLLATERAL_OWNER" },
-          { source: "A2", target: "C1", relation: "CO_APPLICANT" },
-          { source: "L2", target: "B2", relation: "ORIGINATED_AT" },
-          { source: "A3", target: "L3", relation: "APPLIED_FOR" },
-          { source: "A3", target: "P1", relation: "COLLATERAL_OWNER" },
-          { source: "A3", target: "C1", relation: "CO_APPLICANT" },
-          { source: "L3", target: "B1", relation: "ORIGINATED_AT" }
-        ];
-
-        const mockAlerts = [
-          "Multiple independent applicants (Ramesh Kumar, Sunita Kumar, Vijay Mallya) sharing the exact same property collateral (45 Residency Rd, Bng).",
-          "Co-applicant Karan Malhotra is linked to multiple critical risk loan applications across different branches (MG Road, Indiranagar)."
-        ];
-
-        setNodes(mockNodes);
-        setEdges(mockEdges);
-        setAlerts(mockAlerts);
-        setSelectedNode(mockNodes[1]); // Sunita Kumar
+        console.warn("FastAPI offline. Graph connection unavailable.");
+        setNodes([]);
+        setEdges([]);
+        setAlerts(["Error: DocuShield graph syndicate intelligence service is offline. Please verify that the FastAPI backend is running."]);
+        setSelectedNode(null);
       } finally {
         setLoading(false);
       }

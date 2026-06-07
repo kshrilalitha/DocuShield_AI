@@ -4,6 +4,8 @@ import React, { useState, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { UploadCloud, File, AlertCircle, CheckCircle, Trash2 } from "lucide-react";
 
+import { apiFetch } from "@/lib/api";
+
 export default function DocumentUpload() {
   const router = useRouter();
   
@@ -91,15 +93,9 @@ export default function DocumentUpload() {
         });
       }, 300);
 
-      // Post to FastAPI backend
-      const token = localStorage.getItem("token") || "";
-      const response = await fetch("http://localhost:8000/api/documents/upload", {
+      // Post to FastAPI backend using apiFetch wrapper
+      const response = await apiFetch("/api/documents/upload", {
         method: "POST",
-        headers: {
-          // Token is fetched from state inside the frontend, but standard Authorization is parsed.
-          // Note: FastAPI RoleChecker extracts jwt
-          "Authorization": `Bearer ${token}`
-        },
         body: formData,
       });
 
