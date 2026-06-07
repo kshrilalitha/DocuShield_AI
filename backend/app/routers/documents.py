@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app import models, schemas, security
 from app.config import settings
-from app.services import forensics, ocr, validator, risk_score
+from app.services import forensics, ocr, validator, risk_score, model_inference, layoutlmv3_service
 
 logger = logging.getLogger("docushield.pipeline")
 
@@ -63,6 +63,13 @@ def upload_documents(
                 except Exception:
                     meta_json = {}
                     
+            layoutlm_intel = None
+            if existing_doc.layoutlm_intelligence:
+                try:
+                    layoutlm_intel = json.loads(existing_doc.layoutlm_intelligence)
+                except Exception:
+                    layoutlm_intel = None
+
             results.append({
                 "document_id": existing_doc.document_id or str(uuid.uuid4()),
                 "status": existing_doc.analysis_status or "processed",
@@ -70,7 +77,8 @@ def upload_documents(
                 "metadata": meta_json,
                 "risk_score": existing_doc.risk_score or existing_doc.fraud_score or 0.0,
                 "risk_level": existing_doc.risk_level or "Low",
-                "issues": reasons
+                "issues": reasons,
+                "layoutlm_intelligence": layoutlm_intel
             })
             continue
             
@@ -87,6 +95,9 @@ def upload_documents(
             
         # 3. Process ELA (Error Level Analysis)
         ela_path = forensics.run_error_level_analysis(saved_path)
+        
+        # Calculate dynamic ELA tamper regions
+        detected_regions = forensics.detect_ela_anomalies(ela_path)
         
         # 4. Process Metadata Analysis
         meta_report = forensics.inspect_metadata(saved_path, original_filename=upload_file.filename)
@@ -115,10 +126,30 @@ def upload_documents(
             "ocr_failed": ocr_failed
         }))
         
+        # 5b. Run AI/ML Document Forgery Classification (ResNet18)
+        try:
+            ml_prediction = model_inference.predict_document(saved_path)
+        except Exception as ml_err:
+            logger.error(f"ML Classifier prediction failed: {ml_err}")
+            ml_prediction = {"prediction": "genuine", "confidence": 0.5, "error": str(ml_err)}
+
+        # 5c. Run LayoutLMv3 Document Intelligence
+        layoutlm_intel = None
+        try:
+            layoutlm_intel = layoutlmv3_service.extract_document_intelligence(saved_path, ocr_report.get("text_blocks", []))
+            logger.info(json.dumps({
+                "event": "layoutlm_completed",
+                "document_id": doc_uuid,
+                "file_name": upload_file.filename
+            }))
+        except Exception as layoutlm_err:
+            logger.error(f"LayoutLMv3 intelligence extraction failed: {layoutlm_err}")
+
         # 6. Calculate Risk Score
         risk_report = risk_score.calculate_risk_score(
             meta_report=meta_report,
             ocr_report=ocr_report,
+            ml_prediction=ml_prediction,
             ocr_failed=ocr_failed
         )
         
@@ -153,13 +184,11 @@ def upload_documents(
             signature_status=signature_status,
             compression_status=compression_status,
             uploaded_by_id=current_user.id,
-            tamper_regions=json.dumps(ocr_report.get("tamper_regions", []) or ([
-                {"id": 1, "x": 75, "y": 295, "w": 250, "h": 30, "risk": "High", "label": "Income Figure Patched (Font mismatch)"},
-                {"id": 2, "x": 380, "y": 680, "w": 120, "h": 50, "risk": "Suspicious", "label": "Signature Block Compression Alteration"}
-            ] if fraud_score > 50.0 else [])),
+            tamper_regions=json.dumps(detected_regions),
             extracted_text=ocr_report.get("extracted_text", "Sample text"),
             metadata_json=json.dumps(meta_report),
             explainable_ai_reasons=json.dumps(risk_report["issues"]),
+            layoutlm_intelligence=json.dumps(layoutlm_intel) if layoutlm_intel else None,
             
             # New processing pipeline columns
             document_id=doc_uuid,
@@ -191,7 +220,8 @@ def upload_documents(
             "metadata": meta_report,
             "risk_score": float(fraud_score),
             "risk_level": risk_report["risk_level"],
-            "issues": risk_report["issues"]
+            "issues": risk_report["issues"],
+            "layoutlm_intelligence": layoutlm_intel
         })
         
     return results
@@ -237,7 +267,8 @@ def get_document_details(
         "tamper_regions": json.loads(doc.tamper_regions or "[]"),
         "explainable_ai_reasons": json.loads(doc.explainable_ai_reasons or "[]"),
         "metadata_json": json.loads(doc.metadata_json or "{}"),
-        "extracted_text": doc.extracted_text
+        "extracted_text": doc.extracted_text,
+        "layoutlm_intelligence": json.loads(doc.layoutlm_intelligence) if doc.layoutlm_intelligence else None
     }
 
 @router.post("/cross-validate", response_model=schemas.CrossValidationResponse)
@@ -253,22 +284,27 @@ def cross_validate_documents(
     if not doc1 or not doc2:
         raise HTTPException(status_code=404, detail="One or both documents do not exist")
 
-    # Map records to validation lists
-    # Note: Extracting properties from text inside documents:
+    # Map records to validation lists using LayoutLMv3 intelligence if available, otherwise regex ocr
+    fields1_ocr = ocr.extract_fields_from_text(doc1.extracted_text or "")
+    fields2_ocr = ocr.extract_fields_from_text(doc2.extracted_text or "")
+    
+    intel1 = json.loads(doc1.layoutlm_intelligence) if doc1.layoutlm_intelligence else {}
+    intel2 = json.loads(doc2.layoutlm_intelligence) if doc2.layoutlm_intelligence else {}
+    
     doc1_payload = {
         "name": doc1.file_name,
-        "applicant_name": "Ramesh Kumar" if "ramesh" in doc1.file_name.lower() or doc1.fraud_score < 50.0 else "Sunita Kumar",
-        "property_address": "45, Residency Road, Bangalore - 560025",
-        "property_id": "PROP-BLR-045",
-        "monthly_income": 145000.0 if doc1.fraud_score < 50.0 else 845000.0
+        "applicant_name": intel1.get("applicant_name", {}).get("value") or fields1_ocr["applicant_name"],
+        "property_address": intel1.get("address", {}).get("value") or fields1_ocr["address"],
+        "property_id": intel1.get("property_id", {}).get("value") or fields1_ocr["property_id"],
+        "monthly_income": intel1.get("income", {}).get("value") or fields1_ocr["monthly_income"]
     }
     
     doc2_payload = {
         "name": doc2.file_name,
-        "applicant_name": "Ramesh Kumar" if "ramesh" in doc2.file_name.lower() or doc2.fraud_score < 50.0 else "Sunita Roy",
-        "property_address": "45, Residency Road, Bangalore - 560025" if "salary" in doc2.file_name.lower() else "Utility Reg M.G. Road",
-        "property_id": "PROP-BLR-045",
-        "monthly_income": 145000.0
+        "applicant_name": intel2.get("applicant_name", {}).get("value") or fields2_ocr["applicant_name"],
+        "property_address": intel2.get("address", {}).get("value") or fields2_ocr["address"],
+        "property_id": intel2.get("property_id", {}).get("value") or fields2_ocr["property_id"],
+        "monthly_income": intel2.get("income", {}).get("value") or fields2_ocr["monthly_income"]
     }
 
     report = validator.perform_cross_validation([doc1_payload, doc2_payload])

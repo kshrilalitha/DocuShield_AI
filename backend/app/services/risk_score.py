@@ -1,12 +1,14 @@
 def calculate_risk_score(
     meta_report: dict,
     ocr_report: dict,
+    ml_prediction: dict = None,
     ocr_failed: bool = False,
     missing_fields: bool = False,
     validation_mismatch: bool = False
 ) -> dict:
     """
     Computes a fraud risk score (0-100) and risk level classification:
+    - AI/ML ResNet18 Classifier penalty (up to +35 based on confidence)
     - Metadata anomaly = +30
     - OCR extraction failure = +20
     - Missing required fields = +25
@@ -14,6 +16,13 @@ def calculate_risk_score(
     """
     score = 0
     issues = []
+
+    # 0. AI/ML ResNet18 prediction penalty
+    if ml_prediction and ml_prediction.get("prediction") == "tampered":
+        confidence = ml_prediction.get("confidence", 0.5)
+        penalty = int(35 * confidence)
+        score += penalty
+        issues.append(f"AI/ML ResNet18 Classifier flagged the document as tampered (confidence: {confidence * 100:.1f}%).")
 
     # 1. Metadata anomaly = +30
     is_meta_anomaly = (

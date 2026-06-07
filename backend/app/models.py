@@ -53,6 +53,7 @@ class Document(Base):
     extracted_text = Column(Text, nullable=True)
     metadata_json = Column(Text, nullable=True)
     explainable_ai_reasons = Column(Text, nullable=True) # JSON list of strings
+    layoutlm_intelligence = Column(Text, nullable=True) # JSON string representation of LayoutLMv3 key-value extractions
 
     uploader = relationship("User", back_populates="documents")
 
