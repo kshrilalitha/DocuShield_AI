@@ -4,7 +4,13 @@ def calculate_risk_score(
     ml_prediction: dict = None,
     ocr_failed: bool = False,
     missing_fields: bool = False,
-    validation_mismatch: bool = False
+    validation_mismatch: bool = False,
+    graph_risk_penalty: int = 0,
+    graph_reason: str = "",
+    possible_forgery: bool = False,
+    signature_similarity: float = 1.0,
+    gnn_fraud_probability: float = 0.0,
+    gnn_risk_level: str = "Low"
 ) -> dict:
     """
     Computes a fraud risk score (0-100) and risk level classification:
@@ -13,6 +19,7 @@ def calculate_risk_score(
     - OCR extraction failure = +20
     - Missing required fields = +25
     - Validation mismatch = +25
+    - Graph syndicate fraud ring penalty (up to +30)
     """
     score = 0
     issues = []
@@ -62,6 +69,22 @@ def calculate_risk_score(
     if has_font_variance or has_sig_anomaly or validation_mismatch:
         score += 25
         issues.append("Validation mismatch or font/signature authenticity layout variance.")
+
+    # 5. Graph syndicate penalty
+    if graph_risk_penalty > 0:
+        score += graph_risk_penalty
+        issues.append(f"Syndicate network alert: {graph_reason}")
+
+    # 6. Signature forgery penalty
+    if possible_forgery:
+        score += 30
+        issues.append(f"Possible signature forgery detected. Signature similarity score of {signature_similarity * 100:.1f}% is below threshold.")
+
+    # 7. GNN syndicate fraud detection penalty
+    if gnn_fraud_probability >= 0.5:
+        gnn_penalty = int(30 * gnn_fraud_probability)
+        score += gnn_penalty
+        issues.append(f"GNN Graph Convolutional Network flagged high syndicate fraud risk: {gnn_fraud_probability * 100:.1f}% probability ({gnn_risk_level} risk level).")
 
     # Bound risk score between 0 and 100
     score = min(max(score, 0), 100)

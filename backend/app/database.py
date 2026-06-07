@@ -33,7 +33,11 @@ def run_db_migrations():
         ("upload_time", "DATETIME"),
         ("analysis_status", "VARCHAR"),
         ("risk_score", "FLOAT"),
-        ("layoutlm_intelligence", "TEXT")
+        ("layoutlm_intelligence", "TEXT"),
+        ("signature_similarity", "FLOAT"),
+        ("possible_forgery", "BOOLEAN"),
+        ("gnn_fraud_probability", "FLOAT"),
+        ("gnn_risk_level", "VARCHAR")
     ]
     with engine.begin() as conn:
         for col, col_type in columns:

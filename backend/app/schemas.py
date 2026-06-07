@@ -51,6 +51,8 @@ class DocumentResponse(BaseModel):
     compression_status: str
     uploaded_at: datetime
     uploaded_by_id: int
+    gnn_fraud_probability: Optional[float] = 0.0
+    gnn_risk_level: Optional[str] = "Low"
 
     class Config:
         from_attributes = True
@@ -79,6 +81,10 @@ class DocumentAnalysisResponse(BaseModel):
     risk_level: str
     issues: List[str]
     layoutlm_intelligence: Optional[LayoutLMv3Intelligence] = None
+    signature_similarity: Optional[float] = 1.0
+    possible_forgery: Optional[bool] = False
+    gnn_fraud_probability: Optional[float] = 0.0
+    gnn_risk_level: Optional[str] = "Low"
 
     class Config:
         from_attributes = True

@@ -17,6 +17,9 @@ run_db_migrations()
 db = SessionLocal()
 try:
     seed_database(db)
+    # Train Graph Neural Network (GNN) on start
+    from app.services import gnn_service
+    gnn_service.train_gnn_model(db)
 finally:
     db.close()
 

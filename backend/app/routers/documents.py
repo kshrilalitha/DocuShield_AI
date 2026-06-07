@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app import models, schemas, security
 from app.config import settings
-from app.services import forensics, ocr, validator, risk_score, model_inference, layoutlmv3_service
+from app.services import forensics, ocr, validator, risk_score, model_inference, layoutlmv3_service, neo4j_service, signature_service
 
 logger = logging.getLogger("docushield.pipeline")
 
@@ -78,7 +78,11 @@ def upload_documents(
                 "risk_score": existing_doc.risk_score or existing_doc.fraud_score or 0.0,
                 "risk_level": existing_doc.risk_level or "Low",
                 "issues": reasons,
-                "layoutlm_intelligence": layoutlm_intel
+                "layoutlm_intelligence": layoutlm_intel,
+                "signature_similarity": existing_doc.signature_similarity,
+                "possible_forgery": existing_doc.possible_forgery,
+                "gnn_fraud_probability": existing_doc.gnn_fraud_probability,
+                "gnn_risk_level": existing_doc.gnn_risk_level
             })
             continue
             
@@ -145,12 +149,60 @@ def upload_documents(
         except Exception as layoutlm_err:
             logger.error(f"LayoutLMv3 intelligence extraction failed: {layoutlm_err}")
 
+        # 5d. Run Graph Syndicate analysis
+        ocr_fields = ocr.extract_fields_from_text(ocr_report.get("extracted_text", ""))
+        intel_fields = {
+            "applicant_name": (layoutlm_intel.get("applicant_name", {}).get("value") if (layoutlm_intel and layoutlm_intel.get("applicant_name")) else ocr_fields["applicant_name"]),
+            "address": (layoutlm_intel.get("address", {}).get("value") if (layoutlm_intel and layoutlm_intel.get("address")) else ocr_fields["address"]),
+            "property_id": (layoutlm_intel.get("property_id", {}).get("value") if (layoutlm_intel and layoutlm_intel.get("property_id")) else ocr_fields["property_id"]),
+            "income": (layoutlm_intel.get("income", {}).get("value") if (layoutlm_intel and layoutlm_intel.get("income")) else ocr_fields["monthly_income"]),
+            "document_type": (layoutlm_intel.get("document_type", {}).get("value") if (layoutlm_intel and layoutlm_intel.get("document_type")) else "UNKNOWN")
+        }
+        
+        # Ensure values exist or fallback
+        app_name = intel_fields["applicant_name"] or ocr_fields["applicant_name"]
+        addr_val = intel_fields["address"] or ocr_fields["address"]
+        
+        phone_numbers = neo4j_service.extract_phone_numbers(ocr_report.get("extracted_text", ""))
+        graph_risk_penalty, graph_reason = neo4j_service.calculate_graph_risk_for_document(
+            doc_uuid, app_name, addr_val, phone_numbers, db
+        )
+
+        # 5e. Run Signature Verification Analysis
+        sig_report = {"signature_similarity": 1.0, "possible_forgery": False}
+        try:
+            sig_report = signature_service.verify_document_signature(
+                saved_path, app_name, ocr_report.get("text_blocks", [])
+            )
+        except Exception as sig_err:
+            logger.error(f"Signature verification failed: {sig_err}")
+
+        # 5f. Run GNN Syndicate Analysis
+        gnn_report = {"gnn_fraud_probability": 0.0, "risk_level": "Low"}
+        try:
+            from app.services import gnn_service
+            gnn_report = gnn_service.predict_graph_risk(
+                doc_id=doc_uuid,
+                applicant_name=app_name,
+                address=addr_val,
+                phone_numbers=phone_numbers,
+                db=db
+            )
+        except Exception as gnn_err:
+            logger.error(f"GNN prediction failed in pipeline: {gnn_err}")
+
         # 6. Calculate Risk Score
         risk_report = risk_score.calculate_risk_score(
             meta_report=meta_report,
             ocr_report=ocr_report,
             ml_prediction=ml_prediction,
-            ocr_failed=ocr_failed
+            ocr_failed=ocr_failed,
+            graph_risk_penalty=graph_risk_penalty,
+            graph_reason=graph_reason,
+            possible_forgery=sig_report["possible_forgery"],
+            signature_similarity=sig_report["signature_similarity"],
+            gnn_fraud_probability=gnn_report["gnn_fraud_probability"],
+            gnn_risk_level=gnn_report["risk_level"]
         )
         
         # Structured log: risk score generated
@@ -189,6 +241,10 @@ def upload_documents(
             metadata_json=json.dumps(meta_report),
             explainable_ai_reasons=json.dumps(risk_report["issues"]),
             layoutlm_intelligence=json.dumps(layoutlm_intel) if layoutlm_intel else None,
+            signature_similarity=round(float(sig_report["signature_similarity"]), 4),
+            possible_forgery=sig_report["possible_forgery"],
+            gnn_fraud_probability=round(float(gnn_report["gnn_fraud_probability"]), 4),
+            gnn_risk_level=gnn_report["risk_level"],
             
             # New processing pipeline columns
             document_id=doc_uuid,
@@ -206,6 +262,12 @@ def upload_documents(
         db.commit()
         db.refresh(doc_record)
         
+        # Sync to Neo4j graph database
+        try:
+            neo4j_service.add_document_nodes_and_relationships(doc_record, intel_fields, phone_numbers)
+        except Exception as neo_sync_err:
+            logger.warning(f"Neo4j sync failed: {neo_sync_err}")
+        
         # Structured log: database saved
         logger.info(json.dumps({
             "event": "database_saved",
@@ -221,7 +283,11 @@ def upload_documents(
             "risk_score": float(fraud_score),
             "risk_level": risk_report["risk_level"],
             "issues": risk_report["issues"],
-            "layoutlm_intelligence": layoutlm_intel
+            "layoutlm_intelligence": layoutlm_intel,
+            "signature_similarity": sig_report["signature_similarity"],
+            "possible_forgery": sig_report["possible_forgery"],
+            "gnn_fraud_probability": gnn_report["gnn_fraud_probability"],
+            "gnn_risk_level": gnn_report["risk_level"]
         })
         
     return results
@@ -268,7 +334,11 @@ def get_document_details(
         "explainable_ai_reasons": json.loads(doc.explainable_ai_reasons or "[]"),
         "metadata_json": json.loads(doc.metadata_json or "{}"),
         "extracted_text": doc.extracted_text,
-        "layoutlm_intelligence": json.loads(doc.layoutlm_intelligence) if doc.layoutlm_intelligence else None
+        "layoutlm_intelligence": json.loads(doc.layoutlm_intelligence) if doc.layoutlm_intelligence else None,
+        "signature_similarity": doc.signature_similarity,
+        "possible_forgery": doc.possible_forgery,
+        "gnn_fraud_probability": doc.gnn_fraud_probability,
+        "gnn_risk_level": doc.gnn_risk_level
     }
 
 @router.post("/cross-validate", response_model=schemas.CrossValidationResponse)
