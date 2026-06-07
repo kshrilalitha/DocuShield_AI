@@ -7,18 +7,25 @@ router = APIRouter(prefix="/analytics", tags=["analytics"])
 
 @router.get("/summary")
 def get_analytics_summary(
-    current_user: models.User = Depends(security.get_current_active_user),
+    current_user: models.User = Depends(security.RoleChecker(["Admin", "Underwriter"])),
     db: Session = Depends(get_db)
 ):
     """
     Returns monthly case trends, risk distributions, and model performance metrics.
     """
     # Count database items
-    total_docs = db.query(models.Document).count()
-    critical_cases = db.query(models.Document).filter(models.Document.risk_level == "Critical").count()
-    high_cases = db.query(models.Document).filter(models.Document.risk_level == "High").count()
-    medium_cases = db.query(models.Document).filter(models.Document.risk_level == "Medium").count()
-    low_cases = db.query(models.Document).filter(models.Document.risk_level == "Low").count()
+    if current_user.role == "Admin":
+        total_docs = db.query(models.Document).count()
+        critical_cases = db.query(models.Document).filter(models.Document.risk_level == "Critical").count()
+        high_cases = db.query(models.Document).filter(models.Document.risk_level == "High").count()
+        medium_cases = db.query(models.Document).filter(models.Document.risk_level == "Medium").count()
+        low_cases = db.query(models.Document).filter(models.Document.risk_level == "Low").count()
+    else:
+        total_docs = db.query(models.Document).filter(models.Document.uploaded_by_id == current_user.id).count()
+        critical_cases = db.query(models.Document).filter(models.Document.uploaded_by_id == current_user.id, models.Document.risk_level == "Critical").count()
+        high_cases = db.query(models.Document).filter(models.Document.uploaded_by_id == current_user.id, models.Document.risk_level == "High").count()
+        medium_cases = db.query(models.Document).filter(models.Document.uploaded_by_id == current_user.id, models.Document.risk_level == "Medium").count()
+        low_cases = db.query(models.Document).filter(models.Document.uploaded_by_id == current_user.id, models.Document.risk_level == "Low").count()
 
     # Base trends
     monthly_trends = [

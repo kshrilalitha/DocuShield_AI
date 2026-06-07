@@ -1,11 +1,5 @@
 import { create } from "zustand";
 
-interface User {
-  username: string;
-  role: string;
-  token: string;
-}
-
 interface Notification {
   id: string;
   title: string;
@@ -16,14 +10,6 @@ interface Notification {
 }
 
 interface DocuShieldState {
-  // Auth Store
-  user: User | null;
-  isLoggedIn: boolean;
-  otpRequired: boolean;
-  login: (username: string, role: string, token: string) => void;
-  setOtpRequired: (required: boolean) => void;
-  logout: () => void;
-
   // Language & Theme Store
   language: "EN" | "HI" | "KN";
   theme: "dark" | "light";
@@ -38,32 +24,6 @@ interface DocuShieldState {
 }
 
 export const useStore = create<DocuShieldState>((set) => ({
-  // Auth Initial State
-  user: null,
-  isLoggedIn: false,
-  otpRequired: false,
-  login: (username, role, token) => {
-    if (typeof window !== "undefined") {
-      localStorage.setItem("token", token);
-      localStorage.setItem("username", username);
-      localStorage.setItem("role", role);
-    }
-    set({
-      user: { username, role, token },
-      isLoggedIn: true,
-      otpRequired: false,
-    });
-  },
-  setOtpRequired: (required) => set({ otpRequired: required }),
-  logout: () => {
-    if (typeof window !== "undefined") {
-      localStorage.removeItem("token");
-      localStorage.removeItem("username");
-      localStorage.removeItem("role");
-    }
-    set({ user: null, isLoggedIn: false, otpRequired: false });
-  },
-
   // Settings
   language: "EN",
   theme: "dark",

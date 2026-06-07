@@ -20,7 +20,7 @@ router = APIRouter(prefix="/documents", tags=["documents"])
 @router.post("/upload", response_model=List[schemas.DocumentAnalysisResponse])
 def upload_documents(
     files: List[UploadFile] = File(...),
-    current_user: models.User = Depends(security.get_current_active_user),
+    current_user: models.User = Depends(security.RoleChecker(["Admin", "Underwriter"])),
     db: Session = Depends(get_db)
 ):
     results = []
@@ -294,21 +294,27 @@ def upload_documents(
 
 @router.get("/", response_model=List[schemas.DocumentResponse])
 def list_documents(
-    current_user: models.User = Depends(security.get_current_active_user),
+    current_user: models.User = Depends(security.RoleChecker(["Admin", "Underwriter"])),
     db: Session = Depends(get_db)
 ):
-    docs = db.query(models.Document).order_by(models.Document.uploaded_at.desc()).all()
+    if current_user.role == "Admin":
+        docs = db.query(models.Document).order_by(models.Document.uploaded_at.desc()).all()
+    else:
+        docs = db.query(models.Document).filter(models.Document.uploaded_by_id == current_user.id).order_by(models.Document.uploaded_at.desc()).all()
     return docs
 
 @router.get("/{doc_id}")
 def get_document_details(
     doc_id: int,
-    current_user: models.User = Depends(security.get_current_active_user),
+    current_user: models.User = Depends(security.RoleChecker(["Admin", "Underwriter"])),
     db: Session = Depends(get_db)
 ):
     doc = db.query(models.Document).filter(models.Document.id == doc_id).first()
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
+        
+    if current_user.role == "Underwriter" and doc.uploaded_by_id != current_user.id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied to this document")
         
     # De-serialize JSON properties
     return {
@@ -345,7 +351,7 @@ def get_document_details(
 def cross_validate_documents(
     doc_id_1: int = Form(...),
     doc_id_2: int = Form(...),
-    current_user: models.User = Depends(security.get_current_active_user),
+    current_user: models.User = Depends(security.RoleChecker(["Admin", "Underwriter"])),
     db: Session = Depends(get_db)
 ):
     doc1 = db.query(models.Document).filter(models.Document.id == doc_id_1).first()
@@ -353,6 +359,10 @@ def cross_validate_documents(
     
     if not doc1 or not doc2:
         raise HTTPException(status_code=404, detail="One or both documents do not exist")
+
+    if current_user.role == "Underwriter":
+        if doc1.uploaded_by_id != current_user.id or doc2.uploaded_by_id != current_user.id:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied to one or both documents")
 
     # Map records to validation lists using LayoutLMv3 intelligence if available, otherwise regex ocr
     fields1_ocr = ocr.extract_fields_from_text(doc1.extracted_text or "")
@@ -402,12 +412,19 @@ def cross_validate_documents(
 
 # Simulated report generation routes
 @router.get("/{doc_id}/download-pdf")
-def download_pdf_report(doc_id: int, db: Session = Depends(get_db)):
+def download_pdf_report(
+    doc_id: int,
+    current_user: models.User = Depends(security.RoleChecker(["Admin", "Underwriter"])),
+    db: Session = Depends(get_db)
+):
     # To keep this zero-dependency and fast, we send a nice text/pdf mock content response
     # Or a dummy report file to verify PDF downloads works.
     doc = db.query(models.Document).filter(models.Document.id == doc_id).first()
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
+        
+    if current_user.role == "Underwriter" and doc.uploaded_by_id != current_user.id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied to this document")
         
     dummy_pdf_content = f"""%PDF-1.4
 %MOCK DOCUSHIELD UNDERWRITING REPORT
@@ -435,10 +452,17 @@ DocuShield AI Platform Underwriting Security
     )
 
 @router.get("/{doc_id}/download-excel")
-def download_excel_report(doc_id: int, db: Session = Depends(get_db)):
+def download_excel_report(
+    doc_id: int,
+    current_user: models.User = Depends(security.RoleChecker(["Admin", "Underwriter"])),
+    db: Session = Depends(get_db)
+):
     doc = db.query(models.Document).filter(models.Document.id == doc_id).first()
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
+        
+    if current_user.role == "Underwriter" and doc.uploaded_by_id != current_user.id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied to this document")
         
     dummy_excel_content = (
         f"DocuShield Case Report\n"

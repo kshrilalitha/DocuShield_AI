@@ -12,6 +12,8 @@ import {
   Sparkles
 } from "lucide-react";
 
+import { apiFetch } from "@/lib/api";
+
 interface Node {
   id: string;
   label: string;
@@ -37,7 +39,7 @@ export default function GraphIntelligence() {
   useEffect(() => {
     async function fetchNetworkData() {
       try {
-        const response = await fetch("http://localhost:8000/api/graph/network");
+        const response = await apiFetch("/api/graph/network");
         if (response.ok) {
           const data = await response.json();
           setNodes(data.nodes);

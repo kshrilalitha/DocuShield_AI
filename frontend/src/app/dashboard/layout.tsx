@@ -27,15 +27,16 @@ import {
   Sparkles
 } from "lucide-react";
 import { useStore } from "@/store";
+import { useAuthStore } from "@/store/authStore";
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
   
+  const { token, user, clearAuth } = useAuthStore();
+  const isLoggedIn = !!token;
+  
   const { 
-    user, 
-    isLoggedIn, 
-    logout, 
     language, 
     setLanguage, 
     theme, 
@@ -183,7 +184,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         {/* Sidebar Footer Logout */}
         <div className="p-3 border-t border-slate-800">
           <button
-            onClick={() => { logout(); router.push("/"); }}
+            onClick={() => { clearAuth(); router.push("/login"); }}
             className="w-full flex items-center space-x-3 px-4 py-3 text-red-400 hover:text-red-300 hover:bg-red-500/10 rounded-lg text-xs font-semibold tracking-wide transition-all"
           >
             <LogOut className="w-5 h-5 shrink-0" />

@@ -16,6 +16,8 @@ import {
   ZoomIn
 } from "lucide-react";
 
+import { apiFetch } from "@/lib/api";
+
 interface DocumentDetails {
   id: number;
   file_name: string;
@@ -46,7 +48,7 @@ function ForensicScannerContent() {
   useEffect(() => {
     async function fetchCaseDetails() {
       try {
-        const response = await fetch(`http://localhost:8000/api/documents/${docId}`);
+        const response = await apiFetch(`/api/documents/${docId}`);
         if (!response.ok) {
           throw new Error("Could not retrieve file analysis details.");
         }
@@ -96,6 +98,48 @@ function ForensicScannerContent() {
     fetchCaseDetails();
   }, [docId]);
 
+  const handleExportPDF = async (e: React.MouseEvent) => {
+    e.preventDefault();
+    if (!details) return;
+    try {
+      const response = await apiFetch(`/api/documents/${details.id}/download-pdf`);
+      if (response.ok) {
+        const blob = await response.blob();
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `DocuShield_Report_${details.file_name}.pdf`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        window.URL.revokeObjectURL(url);
+      }
+    } catch (err) {
+      console.error("Failed to download PDF report", err);
+    }
+  };
+
+  const handleExportExcel = async (e: React.MouseEvent) => {
+    e.preventDefault();
+    if (!details) return;
+    try {
+      const response = await apiFetch(`/api/documents/${details.id}/download-excel`);
+      if (response.ok) {
+        const blob = await response.blob();
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `DocuShield_Case_${details.file_name}.csv`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        window.URL.revokeObjectURL(url);
+      }
+    } catch (err) {
+      console.error("Failed to download CSV report", err);
+    }
+  };
+
   if (loading) {
     return (
       <div className="flex flex-col items-center justify-center h-96 space-y-4">
@@ -134,22 +178,20 @@ function ForensicScannerContent() {
         </div>
         
         <div className="flex items-center space-x-3 w-full sm:w-auto">
-          <a 
-            href={`http://localhost:8000/api/documents/${details.id}/download-pdf`}
-            download
+          <button 
+            onClick={handleExportPDF}
             className="flex-1 sm:flex-initial flex items-center justify-center space-x-2 px-4 py-2.5 bg-slate-900 border border-slate-850 hover:border-accent text-accent rounded-lg text-xs font-semibold"
           >
             <FileText className="w-4 h-4" />
             <span>Export PDF Case</span>
-          </a>
-          <a 
-            href={`http://localhost:8000/api/documents/${details.id}/download-excel`}
-            download
+          </button>
+          <button 
+            onClick={handleExportExcel}
             className="flex-1 sm:flex-initial flex items-center justify-center space-x-2 px-4 py-2.5 bg-slate-900 border border-slate-850 hover:border-accent text-accent rounded-lg text-xs font-semibold"
           >
             <FileSpreadsheet className="w-4 h-4" />
             <span>Export Excel</span>
-          </a>
+          </button>
         </div>
       </div>
 

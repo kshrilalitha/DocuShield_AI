@@ -155,7 +155,7 @@ def run_test():
         print(json.dumps(metrics, indent=4))
         
         # Assert model file is created
-        model_path = os.path.join("models", "gnn_model.pth")
+        model_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "models", "gnn_model.pth"))
         assert os.path.exists(model_path), "GNN model file was not saved!"
         print(f"-> GNN model saved to {model_path} successfully.")
 

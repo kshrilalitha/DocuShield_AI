@@ -57,15 +57,15 @@ def login(credentials: schemas.UserLogin, db: Session = Depends(get_db)):
             detail="Incorrect username or password"
         )
     
-    # Return JWT indicating OTP is required to complete authentication
+    # Return JWT access_token with user's id, username, and role in the payload
     access_token = security.create_access_token(
-        data={"sub": user.username, "role": user.role}
+        data={"sub": user.username, "id": user.id, "username": user.username, "role": user.role}
     )
     
-    # Log successful login (stage 1)
+    # Log successful login
     db.add(models.AuditLog(
         username=user.username,
-        event="User logged in - OTP challenge issued",
+        event="User logged in successfully",
         status="Success"
     ))
     db.commit()
@@ -75,7 +75,7 @@ def login(credentials: schemas.UserLogin, db: Session = Depends(get_db)):
         token_type="bearer",
         role=user.role,
         username=user.username,
-        otp_required=True # Forces UI to present OTP sheet
+        otp_required=False # Bypassed/disabled for production-ready flow
     )
 
 @router.post("/verify-otp", response_model=schemas.Token)

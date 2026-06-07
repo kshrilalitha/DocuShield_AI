@@ -12,6 +12,8 @@ import {
   Play
 } from "lucide-react";
 
+import { apiFetch } from "@/lib/api";
+
 interface Document {
   id: number;
   file_name: string;
@@ -33,7 +35,7 @@ export default function CrossValidation() {
   useEffect(() => {
     async function fetchDocs() {
       try {
-        const response = await fetch("http://localhost:8000/api/documents/");
+        const response = await apiFetch("/api/documents/");
         if (response.ok) {
           const data = await response.json();
           setDocuments(data);
@@ -73,7 +75,7 @@ export default function CrossValidation() {
       formData.append("doc_id_1", docId1);
       formData.append("doc_id_2", docId2);
 
-      const response = await fetch("http://localhost:8000/api/documents/cross-validate", {
+      const response = await apiFetch("/api/documents/cross-validate", {
         method: "POST",
         body: formData
       });

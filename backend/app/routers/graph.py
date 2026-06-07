@@ -8,7 +8,7 @@ router = APIRouter(prefix="/graph", tags=["graph"])
 
 @router.get("/network")
 def get_fraud_graph_network(
-    current_user: models.User = Depends(security.get_current_active_user),
+    current_user: models.User = Depends(security.RoleChecker(["Admin", "Underwriter"])),
     db: Session = Depends(get_db)
 ):
     """

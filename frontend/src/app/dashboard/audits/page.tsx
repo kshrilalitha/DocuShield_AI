@@ -10,7 +10,8 @@ import {
   CheckCircle2, 
   AlertTriangle 
 } from "lucide-react";
-import { useStore } from "@/store";
+import { useAuthStore } from "@/store/authStore";
+import { apiFetch } from "@/lib/api";
 
 interface AuditLog {
   id: number;
@@ -21,7 +22,7 @@ interface AuditLog {
 }
 
 export default function AuditLogs() {
-  const { user } = useStore();
+  const { user } = useAuthStore();
   
   const [loading, setLoading] = useState(true);
   const [logs, setLogs] = useState<AuditLog[]>([]);
@@ -30,12 +31,7 @@ export default function AuditLogs() {
   useEffect(() => {
     async function fetchLogs() {
       try {
-        const token = localStorage.getItem("token") || "";
-        const response = await fetch("http://localhost:8000/api/audits/", {
-          headers: {
-            "Authorization": `Bearer ${token}`
-          }
-        });
+        const response = await apiFetch("/api/audits/");
         if (response.ok) {
           const data = await response.json();
           setLogs(data);

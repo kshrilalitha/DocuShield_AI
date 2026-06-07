@@ -14,6 +14,8 @@ import {
   Fingerprint
 } from "lucide-react";
 
+import { apiFetch } from "@/lib/api";
+
 interface Document {
   id: number;
   file_name: string;
@@ -33,10 +35,10 @@ export default function DashboardHome() {
   useEffect(() => {
     async function fetchData() {
       try {
-        // Fetch from backend
+        // Fetch from backend using apiFetch wrapper
         const [analRes, docRes] = await Promise.all([
-          fetch("http://localhost:8000/api/analytics/summary"),
-          fetch("http://localhost:8000/api/documents/")
+          apiFetch("/api/analytics/summary"),
+          apiFetch("/api/documents/")
         ]);
         
         if (analRes.ok && docRes.ok) {
