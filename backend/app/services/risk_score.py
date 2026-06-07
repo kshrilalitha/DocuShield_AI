@@ -3,7 +3,10 @@ def calculate_risk_score(
     ocr_report: dict,
     ocr_failed: bool = False,
     missing_fields: bool = False,
-    validation_mismatch: bool = False
+    validation_mismatch: bool = False,
+    ela_score: float = 0.0,
+    compress_report: dict = None,
+    quality_report: dict = None
 ) -> dict:
     """
     Computes a fraud risk score (0-100) and risk level classification:
@@ -11,6 +14,9 @@ def calculate_risk_score(
     - OCR extraction failure = +20
     - Missing required fields = +25
     - Validation mismatch = +25
+    - ELA discrepancy = up to +25
+    - Compression artifacts = +15
+    - Image quality warning = +10
     """
     score = 0
     issues = []
@@ -22,7 +28,10 @@ def calculate_risk_score(
     )
     if is_meta_anomaly:
         score += 30
-        issues.append("Metadata anomaly detected (editing software or timestamp alteration flags).")
+        for warning in meta_report.get("warnings", []):
+            issues.append(f"Metadata check: {warning}")
+        if not meta_report.get("warnings"):
+            issues.append("Metadata anomaly detected (editing software or timestamp alteration flags).")
 
     # 2. OCR extraction failure = +20
     if ocr_failed:
@@ -53,6 +62,24 @@ def calculate_risk_score(
     if has_font_variance or has_sig_anomaly or validation_mismatch:
         score += 25
         issues.append("Validation mismatch or font/signature authenticity layout variance.")
+
+    # 5. ELA score = up to +25
+    if ela_score > 35.0:
+        added = min(int((ela_score - 35) * 0.5) + 10, 25)
+        score += added
+        issues.append(f"Error Level Analysis (ELA) discrepancy detected (Score: {ela_score}%).")
+
+    # 6. Compression warnings = +15
+    if compress_report and compress_report.get("status") == "Alert":
+        score += 15
+        for warning in compress_report.get("warnings", []):
+            issues.append(f"Compression check: {warning}")
+
+    # 7. Image quality warnings = +10
+    if quality_report and quality_report.get("status") == "Alert":
+        score += 10
+        for warning in quality_report.get("warnings", []):
+            issues.append(f"Image quality check: {warning}")
 
     # Bound risk score between 0 and 100
     score = min(max(score, 0), 100)

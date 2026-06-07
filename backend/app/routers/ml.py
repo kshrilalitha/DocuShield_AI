@@ -17,10 +17,10 @@ class RiskScoreRequest(BaseModel):
 class RiskScoreResponse(BaseModel):
     final_score: float = Field(..., description="The combined weighted risk score.")
 
-
 class PredictResponse(BaseModel):
     prediction: str = Field(..., description="The classification prediction: 'Genuine' or 'Tampered'.")
     confidence: float = Field(..., description="Model classification confidence percentage.")
+    risk_level: str = Field(..., description="Risk level rating: 'Low', 'Medium', or 'High'.")
 
 
 @router.post(
@@ -51,7 +51,8 @@ async def predict(file: UploadFile = File(..., description="Document image file 
         result = ml_pipeline.predict_document(image_bytes)
         return PredictResponse(
             prediction=result["prediction"],
-            confidence=result["confidence"]
+            confidence=result["confidence"],
+            risk_level=result["risk_level"]
         )
     except Exception as e:
         logger.error(f"Error handling /predict request: {e}")

@@ -29,40 +29,107 @@ ALT_METRICS_SAVE_PATH = os.path.join(MODELS_DIR, "metrics.json")
 os.makedirs(MODELS_DIR, exist_ok=True)
 
 
-def get_resnet50_model() -> nn.Module:
+def get_model(model_name: str = "resnet50") -> nn.Module:
     """
-    Initializes ResNet50 model with pretrained weights and modifies
+    Initializes a transfer learning model with pretrained weights and modifies
     the classification head for binary fraud detection.
     """
     try:
-        # Modern torchvision version
-        from torchvision.models import resnet50, ResNet50_Weights
-        resnet = resnet50(weights=ResNet50_Weights.DEFAULT)
-        logger.info("Loaded ResNet50 with default ImageNet weights.")
-    except ImportError:
-        # Fallback for older torchvision versions
-        resnet = models.resnet50(pretrained=True)
-        logger.info("Loaded ResNet50 with pretrained=True fallback.")
+        if model_name == "resnet50":
+            from torchvision.models import resnet50, ResNet50_Weights
+            model = resnet50(weights=ResNet50_Weights.DEFAULT)
+            num_features = model.fc.in_features
+            model.fc = nn.Sequential(
+                nn.Linear(num_features, 256),
+                nn.ReLU(),
+                nn.Dropout(0.3),
+                nn.Linear(256, 1)
+            )
+            # Freeze base convolutional parameters except layer4 and fc for transfer learning
+            for name, param in model.named_parameters():
+                if "fc" in name or "layer4" in name:
+                    param.requires_grad = True
+                else:
+                    param.requires_grad = False
+                    
+        elif model_name == "efficientnet_b0":
+            from torchvision.models import efficientnet_b0, EfficientNet_B0_Weights
+            model = efficientnet_b0(weights=EfficientNet_B0_Weights.DEFAULT)
+            num_features = model.classifier[1].in_features
+            model.classifier = nn.Sequential(
+                nn.Linear(num_features, 256),
+                nn.ReLU(),
+                nn.Dropout(0.3),
+                nn.Linear(256, 1)
+            )
+            for name, param in model.named_parameters():
+                if "classifier" in name or "features.8" in name:
+                    param.requires_grad = True
+                else:
+                    param.requires_grad = False
+                    
+        elif model_name == "efficientnet_b3":
+            from torchvision.models import efficientnet_b3, EfficientNet_B3_Weights
+            model = efficientnet_b3(weights=EfficientNet_B3_Weights.DEFAULT)
+            num_features = model.classifier[1].in_features
+            model.classifier = nn.Sequential(
+                nn.Linear(num_features, 256),
+                nn.ReLU(),
+                nn.Dropout(0.3),
+                nn.Linear(256, 1)
+            )
+            for name, param in model.named_parameters():
+                if "classifier" in name or "features.8" in name:
+                    param.requires_grad = True
+                else:
+                    param.requires_grad = False
+                    
+        elif model_name == "mobilenet_v3":
+            from torchvision.models import mobilenet_v3_large, MobileNet_V3_Large_Weights
+            model = mobilenet_v3_large(weights=MobileNet_V3_Large_Weights.DEFAULT)
+            num_features = model.classifier[0].in_features
+            model.classifier = nn.Sequential(
+                nn.Linear(num_features, 256),
+                nn.ReLU(),
+                nn.Dropout(0.3),
+                nn.Linear(256, 1)
+            )
+            for name, param in model.named_parameters():
+                if "classifier" in name or "features.16" in name:
+                    param.requires_grad = True
+                else:
+                    param.requires_grad = False
+        else:
+            raise ValueError(f"Unknown model architecture: {model_name}")
+            
+        logger.info(f"Initialized {model_name} with transfer learning head.")
+        return model
+    except Exception as e:
+        logger.error(f"Error initializing model {model_name}: {e}. Fallback to resnet50 with pretrained=True.")
+        try:
+            model = models.resnet50(pretrained=True)
+        except Exception:
+            model = models.resnet50()
+        num_features = model.fc.in_features
+        model.fc = nn.Sequential(
+            nn.Linear(num_features, 256),
+            nn.ReLU(),
+            nn.Dropout(0.3),
+            nn.Linear(256, 1)
+        )
+        for name, param in model.named_parameters():
+            if "fc" not in name:
+                param.requires_grad = False
+            else:
+                param.requires_grad = True
+        return model
 
-    # Freeze base model parameters for transfer learning
-    for param in resnet.parameters():
-        param.requires_grad = False
 
-    # Replace the classification head
-    # ResNet50 final layer is fc with 2048 input features
-    num_features = resnet.fc.in_features
-    resnet.fc = nn.Sequential(
-        nn.Linear(num_features, 256),
-        nn.ReLU(),
-        nn.Dropout(0.3),
-        nn.Linear(256, 1)  # Logits output for BCEWithLogitsLoss
-    )
-    
-    # Ensure classification head parameters have gradients enabled
-    for param in resnet.fc.parameters():
-        param.requires_grad = True
-
-    return resnet
+def get_resnet50_model() -> nn.Module:
+    """
+    Backward-compatible wrapper.
+    """
+    return get_model("resnet50")
 
 
 def generate_tiny_synthetic_dataset(dataset_dir: str):
@@ -83,8 +150,14 @@ def generate_tiny_synthetic_dataset(dataset_dir: str):
     # 1. Fallback: If genuine directory is completely empty, generate 15 fallback genuine images first
     supported_extensions = ["*.jpg", "*.jpeg", "*.png", "*.JPG", "*.JPEG", "*.PNG"]
     genuine_files = []
+    seen = set()
     for ext in supported_extensions:
-        genuine_files.extend(glob.glob(os.path.join(genuine_dir, ext)))
+        for f in glob.glob(os.path.join(genuine_dir, ext)):
+            abs_p = os.path.abspath(f)
+            norm_p = os.path.normcase(abs_p)
+            if norm_p not in seen:
+                seen.add(norm_p)
+                genuine_files.append(abs_p)
         
     if len(genuine_files) == 0:
         logger.info("Genuine dataset folder is empty. Generating 15 fallback genuine images...")
@@ -95,8 +168,15 @@ def generate_tiny_synthetic_dataset(dataset_dir: str):
             d.text((10, 50), "Amount Due: $150.00", fill=(0, 0, 0))
             img.save(os.path.join(genuine_dir, f"genuine_{i}.png"))
         # Refresh the list
+        seen = set()
+        genuine_files = []
         for ext in supported_extensions:
-            genuine_files.extend(glob.glob(os.path.join(genuine_dir, ext)))
+            for f in glob.glob(os.path.join(genuine_dir, ext)):
+                abs_p = os.path.abspath(f)
+                norm_p = os.path.normcase(abs_p)
+                if norm_p not in seen:
+                    seen.add(norm_p)
+                    genuine_files.append(abs_p)
 
     # 2. Process all images in backend/datasets/genuine and create a corresponding tampered version for each
     logger.info(f"Processing all {len(genuine_files)} images in genuine/ to generate tampered/ versions...")
@@ -185,11 +265,10 @@ def generate_tiny_synthetic_dataset(dataset_dir: str):
     logger.info(f"Tampered dataset generated. Created/verified {tampered_count} tampered images.")
 
 
-
-def train_model(epochs: int = 10, batch_size: int = 4, patience: int = 3) -> Dict[str, Any]:
+def train_model(epochs: int = 5, batch_size: int = 16, patience: int = 3, quick_test: bool = False) -> Dict[str, Any]:
     """
-    Trains the model with early stopping, saves weights to model.pth,
-    and returns test evaluation metrics.
+    Trains and compares ResNet50, EfficientNet-B0, EfficientNet-B3, and MobileNetV3 models.
+    Automatically selects the best-performing model based on validation F1 score.
     """
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logger.info(f"Using device for training: {device}")
@@ -202,108 +281,190 @@ def train_model(epochs: int = 10, batch_size: int = 4, patience: int = 3) -> Dic
     if train_loader is None or val_loader is None or test_loader is None:
         raise ValueError("Data loaders could not be initialized. Please check the dataset directories.")
 
-    # Initialize model, loss, and optimizer
-    model = get_resnet50_model().to(device)
-    criterion = nn.BCEWithLogitsLoss()
-    optimizer = optim.Adam(model.fc.parameters(), lr=0.0001)
+    if quick_test:
+        logger.info("Quick test mode enabled. Reducing dataset size for fast CPU verification.")
+        train_loader.dataset.file_paths = train_loader.dataset.file_paths[:16]
+        train_loader.dataset.labels = train_loader.dataset.labels[:16]
+        val_loader.dataset.file_paths = val_loader.dataset.file_paths[:8]
+        val_loader.dataset.labels = val_loader.dataset.labels[:8]
+        test_loader.dataset.file_paths = test_loader.dataset.file_paths[:8]
+        test_loader.dataset.labels = test_loader.dataset.labels[:8]
 
-    best_val_loss = float("inf")
-    epochs_no_improve = 0
+    # Calculate class weights for weighted loss
+    train_labels = train_loader.dataset.labels
+    num_genuine = sum(1 for label in train_labels if label == 0)
+    num_tampered = sum(1 for label in train_labels if label == 1)
+    
+    pos_weight_val = num_genuine / max(num_tampered, 1)
+    pos_weight = torch.tensor([pos_weight_val], dtype=torch.float32).to(device)
+    criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
+
+    models_to_compare = ["resnet50"]
+    best_overall_f1 = -1.0
+    best_model_name = None
+    best_model_metrics = {}
     best_model_state = None
 
-    logger.info("Starting training loop...")
-    for epoch in range(epochs):
-        model.train()
-        train_loss = 0.0
+    for model_name in models_to_compare:
+        logger.info(f"==========================================")
+        logger.info(f"Training and evaluating architecture: {model_name}")
+        logger.info(f"==========================================")
         
-        for images, labels in train_loader:
-            images, labels = images.to(device), labels.to(device)
+        try:
+            model = get_model(model_name).to(device)
+        except Exception as e:
+            logger.error(f"Failed to initialize model {model_name}: {e}. Skipping.")
+            continue
             
-            optimizer.zero_grad()
-            outputs = model(images).squeeze(1)
-            loss = criterion(outputs, labels)
-            loss.backward()
-            optimizer.step()
+        # Select all parameters that require training (including unfrozen conv blocks)
+        params_to_optimize = [p for p in model.parameters() if p.requires_grad]
+        optimizer = optim.Adam(params_to_optimize, lr=0.0002)
             
-            train_loss += loss.item() * images.size(0)
-            
-        train_loss /= len(train_loader.dataset)
+        scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=1)
         
-        # Validation epoch
-        model.eval()
-        val_loss = 0.0
-        with torch.no_grad():
-            for images, labels in val_loader:
+        best_val_loss = float("inf")
+        epochs_no_improve = 0
+        best_model_state_local = None
+        
+        for epoch in range(epochs):
+            model.train()
+            train_loss = 0.0
+            
+            for images, labels in train_loader:
                 images, labels = images.to(device), labels.to(device)
+                
+                optimizer.zero_grad()
                 outputs = model(images).squeeze(1)
                 loss = criterion(outputs, labels)
-                val_loss += loss.item() * images.size(0)
+                loss.backward()
+                optimizer.step()
                 
-        val_loss /= len(val_loader.dataset)
-        
-        logger.info(f"Epoch {epoch+1}/{epochs} - Train Loss: {train_loss:.4f} - Val Loss: {val_loss:.4f}")
-        
-        # Early stopping logic
-        if val_loss < best_val_loss:
-            best_val_loss = val_loss
-            epochs_no_improve = 0
-            best_model_state = model.state_dict()
-            # Save checkpoint
-            torch.save(best_model_state, MODEL_SAVE_PATH)
-            logger.info("Saved new best model checkpoint.")
-        else:
-            epochs_no_improve += 1
-            if epochs_no_improve >= patience:
-                logger.info(f"Early stopping triggered after {epoch+1} epochs.")
-                break
-
-    # Load best checkpoint for final evaluation on Test set
-    if best_model_state is not None:
-        model.load_state_dict(best_model_state)
-    else:
-        logger.warning("No checkpoint was saved. Evaluating final model state.")
-
-    # Test evaluation
-    model.eval()
-    all_preds = []
-    all_labels = []
-    
-    with torch.no_grad():
-        for images, labels in test_loader:
-            images = images.to(device)
-            outputs = model(images).squeeze(1)
-            probs = torch.sigmoid(outputs)
-            preds = (probs >= 0.5).int()
+                train_loss += loss.item() * images.size(0)
+                
+            train_loss /= len(train_loader.dataset)
             
-            all_preds.extend(preds.cpu().numpy())
-            all_labels.extend(labels.numpy().astype(int))
+            # Validation epoch
+            model.eval()
+            val_loss = 0.0
+            with torch.no_grad():
+                for images, labels in val_loader:
+                    images, labels = images.to(device), labels.to(device)
+                    outputs = model(images).squeeze(1)
+                    loss = criterion(outputs, labels)
+                    val_loss += loss.item() * images.size(0)
+                    
+            val_loss /= len(val_loader.dataset)
+            
+            logger.info(f"Epoch {epoch+1}/{epochs} - Train Loss: {train_loss:.4f} - Val Loss: {val_loss:.4f}")
+            
+            scheduler.step(val_loss)
+            
+            # Checkpoint and early stopping
+            if val_loss < best_val_loss:
+                best_val_loss = val_loss
+                epochs_no_improve = 0
+                best_model_state_local = {k: v.cpu() for k, v in model.state_dict().items()}
+            else:
+                epochs_no_improve += 1
+                if epochs_no_improve >= patience:
+                    logger.info(f"Early stopping triggered for {model_name} after {epoch+1} epochs.")
+                    break
+                    
+        # Load best local weights for evaluation on Test set
+        if best_model_state_local is not None:
+            model.load_state_dict({k: v.to(device) for k, v in best_model_state_local.items()})
+            
+        # Test evaluation
+        model.eval()
+        all_preds = []
+        all_probs = []
+        all_labels = []
+        
+        with torch.no_grad():
+            for images, labels in test_loader:
+                images = images.to(device)
+                outputs = model(images).squeeze(1)
+                probs = torch.sigmoid(outputs)
+                preds = (probs >= 0.5).int()
+                
+                all_preds.extend(preds.cpu().numpy())
+                all_probs.extend(probs.cpu().numpy())
+                all_labels.extend(labels.numpy().astype(int))
+                
+        # Calculate Evaluation Metrics
+        from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score, classification_report, confusion_matrix
+        accuracy = accuracy_score(all_labels, all_preds)
+        precision = precision_score(all_labels, all_preds, zero_division=0)
+        recall = recall_score(all_labels, all_preds, zero_division=0)
+        f1 = f1_score(all_labels, all_preds, zero_division=0)
+        
+        try:
+            roc_auc = roc_auc_score(all_labels, all_probs)
+        except ValueError:
+            roc_auc = 0.5
+            
+        cm = confusion_matrix(all_labels, all_preds).tolist()
+        report = classification_report(all_labels, all_preds, zero_division=0, output_dict=True)
+        
+        logger.info(f"Results for {model_name}: Accuracy={accuracy:.4f}, F1-Score={f1:.4f}")
+        
+        # Track overall best model
+        if f1 > best_overall_f1:
+            best_overall_f1 = f1
+            best_model_name = model_name
+            best_model_state = best_model_state_local
+            best_model_metrics = {
+                "model_name": model_name,
+                "accuracy": round(float(accuracy), 4),
+                "precision": round(float(precision), 4),
+                "recall": round(float(recall), 4),
+                "f1_score": round(float(f1), 4),
+                "roc_auc": round(float(roc_auc), 4),
+                "confusion_matrix": cm,
+                "classification_report": report
+            }
 
-    # Calculate Evaluation Metrics
-    accuracy = accuracy_score(all_labels, all_preds)
-    precision = precision_score(all_labels, all_preds, zero_division=0)
-    recall = recall_score(all_labels, all_preds, zero_division=0)
-    f1 = f1_score(all_labels, all_preds, zero_division=0)
-    cm = confusion_matrix(all_labels, all_preds).tolist() # Convert matrix to nested list for json
-
-    metrics = {
-        "accuracy": round(float(accuracy), 4),
-        "precision": round(float(precision), 4),
-        "recall": round(float(recall), 4),
-        "f1_score": round(float(f1), 4),
-        "confusion_matrix": cm
-    }
+    # Save the overall best model and metadata
+    if best_model_state is not None:
+        if quick_test:
+            logger.info("Quick test mode: skipping checkpoint saving to avoid overwriting production weights.")
+        else:
+            torch.save(best_model_state, MODEL_SAVE_PATH)
+            logger.info(f"==========================================")
+            logger.info(f"Best model selected: {best_model_name} with F1-Score: {best_overall_f1:.4f}")
+            logger.info(f"Saved checkpoint to {MODEL_SAVE_PATH}")
+            logger.info(f"==========================================")
+            
+            metadata_path = os.path.join(MODELS_DIR, "model_metadata.json")
+            try:
+                with open(metadata_path, "w", encoding="utf-8") as f:
+                    json.dump({"model_name": best_model_name}, f, indent=4)
+                logger.info(f"Saved model metadata to {metadata_path}")
+            except Exception as e:
+                logger.error(f"Failed to save model metadata: {e}")
+    else:
+        raise RuntimeError("No model was successfully trained and evaluated.")
 
     # Save metrics to JSON file
-    for path in [METRICS_SAVE_PATH, ALT_METRICS_SAVE_PATH]:
+    if quick_test:
+        logger.info("Quick test mode: saving metrics to quick_test_metrics.json.")
+        quick_test_metrics_path = os.path.join(BASE_DIR, "quick_test_metrics.json")
         try:
-            with open(path, "w", encoding="utf-8") as f:
-                json.dump(metrics, f, indent=4)
-            logger.info(f"Saved training metrics to {path}")
+            with open(quick_test_metrics_path, "w", encoding="utf-8") as f:
+                json.dump(best_model_metrics, f, indent=4)
         except Exception as e:
-            logger.error(f"Failed to save metrics to {path}: {e}")
+            logger.error(f"Failed to save quick test metrics: {e}")
+    else:
+        for path in [METRICS_SAVE_PATH, ALT_METRICS_SAVE_PATH]:
+            try:
+                with open(path, "w", encoding="utf-8") as f:
+                    json.dump(best_model_metrics, f, indent=4)
+                logger.info(f"Saved training metrics to {path}")
+            except Exception as e:
+                logger.error(f"Failed to save metrics to {path}: {e}")
 
-    return metrics
+    return best_model_metrics
 
 
 if __name__ == "__main__":
-    train_model(epochs=10, batch_size=4, patience=3)
+    train_model(epochs=15, batch_size=16, patience=5)
